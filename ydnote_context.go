@@ -27,6 +27,6 @@ type YDNoteContext struct {
 
 func CreateContext() *YDNoteContext {
 	ctx, cancel := context.WithCancel(context.TODO())
-
+	ydContext = ctx
 	return &YDNoteContext{Context: ctx, ContextCancel: cancel}
 }

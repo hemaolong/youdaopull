@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/rs/zerolog/log"
@@ -40,9 +39,9 @@ func (ys *ydNoteSession) listDir(ydContext *YDNoteContext, parent string) ([]*Yd
 // 	return entryID, nil
 // }
 
-func (ys *ydNoteSession) startPull(ydContext *YDNoteContext) {
+func (ys *ydNoteSession) pullDir(ydContext *YDNoteContext, parent string) {
 	// 获取根目录所有文件
-	rootID, err := ys.listDir(ydContext, "/")
+	rootID, err := ys.listDir(ydContext, parent)
 	if err != nil {
 		log.Error().Err(err).Msg("有道云笔记获取根目录文件夹错误")
 		return
@@ -51,28 +50,28 @@ func (ys *ydNoteSession) startPull(ydContext *YDNoteContext) {
 
 }
 
-// 下载所有笔记
-func (ys *ydNoteSession) pullAll(ydContext *YDNoteContext, ydnoteDir, rootID string) error {
-	// 检查本地路径，不存在则创建
+// // 下载所有笔记
+// func (ys *ydNoteSession) pullAll(ydContext *YDNoteContext, ydnoteDir, rootID string) error {
+// 	// 检查本地路径，不存在则创建
 
-	// 此处设置，后面会用，避免传参
-	// ys.localDir = localDir
+// 	// 此处设置，后面会用，避免传参
+// 	// ys.localDir = localDir
 
-	// 检查有道路径
-	if len(ydnoteDir) != 0 {
-		rootID, err := ys.getDirID(ydContext, rootID, ydnoteDir)
-		if err != nil {
-			return err
-		}
+// 	// 检查有道路径
+// 	if len(ydnoteDir) != 0 {
+// 		rootID, err := ys.getDirID(ydContext, rootID, ydnoteDir)
+// 		if err != nil {
+// 			return err
+// 		}
 
-		log.Info().Str("dir", ydnoteDir).Str("root_id", rootID).Msg("")
-		if len(rootID) == 0 {
-			return fmt.Errorf("此文件夹「%s」不是顶层文件夹，暂不能下载！", ydnoteDir)
-		}
-	}
+// 		log.Info().Str("dir", ydnoteDir).Str("root_id", rootID).Msg("")
+// 		if len(rootID) == 0 {
+// 			return fmt.Errorf("此文件夹「%s」不是顶层文件夹，暂不能下载！", ydnoteDir)
+// 		}
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 // 递归遍历，根据 id 找到目录下的所有文件
 func (ys *ydNoteSession) walkDir(ydContext *YDNoteContext, id, localDir string) error {
@@ -104,21 +103,21 @@ func (ys *ydNoteSession) walkDir(ydContext *YDNoteContext, id, localDir string) 
 
 }
 
-func (ys *ydNoteSession) start(ctx *YDNoteContext) {
-	doYoudaoNoteLogin(ctx, WEB_URL, ys.startPull)
-}
+// func (ys *ydNoteSession) start(ctx *YDNoteContext) {
+// 	doYoudaoNoteLogin(ctx, WEB_URL, ys.startPull)
+// }
 
-func createYdNoteSession() (*ydNoteSession, error) {
-	dirs := []string{ydLocalDir, localFileDir(""), localCacheDir("")}
-	for _, dir := range dirs {
-		_, err := os.Stat(dir)
-		if err != nil {
-			err := os.MkdirAll(dir, 0755)
-			if err != nil {
-				return nil, fmt.Errorf("创建本地目录:%s失败(%w)，没有权限？", dir, err)
-			}
-		}
-	}
+// func createYdNoteSession() (*ydNoteSession, error) {
+// 	dirs := []string{ydLocalDir, localFileDir(""), localCacheDir("")}
+// 	for _, dir := range dirs {
+// 		_, err := os.Stat(dir)
+// 		if err != nil {
+// 			err := os.MkdirAll(dir, 0755)
+// 			if err != nil {
+// 				return nil, fmt.Errorf("创建本地目录:%s失败(%w)，没有权限？", dir, err)
+// 			}
+// 		}
+// 	}
 
-	return &ydNoteSession{}, nil
-}
+// 	return &ydNoteSession{}, nil
+// }

@@ -3,7 +3,12 @@ package main
 import (
 	"fmt"
 	"io/fs"
+	"os"
 	"time"
+
+	jsoniter "github.com/json-iterator/go"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // 2021.11.26 有道云笔记格式
@@ -115,6 +120,15 @@ type YdNoteFile struct {
 	Children []*YdNoteFile
 }
 
+func (yf *YdNoteFile) IsUpdated(f *YdNoteFile) bool {
+	return f.Size() != yf.Size() || f.ModTime().Unix() != yf.ModTime().Unix()
+}
+
+func (yf *YdNoteFile) Dict() *zerolog.Event {
+	return zerolog.Dict().Str("title", yf.FileMeta.Title).Str("name", yf.Name()).
+		Int64("size", yf.Size())
+}
+
 // fs.File
 // 名字不是唯一的，以id为准
 func (yf *YdNoteFile) Name() string {
@@ -175,11 +189,79 @@ func (yf *YdNoteFile) ReadDir(n int) ([]fs.DirEntry, error) {
 
 // 本地文件缓存信息，用于增量拉取
 type YdFileSystem struct {
+	ydNoteSession
+
 	files map[string]*YdNoteFile // 所有文件，包含目录
 }
 
-func (yfs *YdFileSystem) Init() {
+func (yfs *YdFileSystem) UpdateFile(f *YdNoteFile) {
+	if old, ok := yfs.files[f.Name()]; ok {
+		if old.IsUpdated(f) {
+			yfs.files[f.Name()] = f
+			log.Info().Dict("old", old.Dict()).Dict("new", f.Dict()).Str("opt", "u").Msg("file updated")
+		}
+		return
+	}
+	yfs.files[f.Name()] = f
+	log.Info().Dict("new", f.Dict()).Str("opt", "+").Msg("file add")
+}
+
+func (yfs *YdFileSystem) Init(ydContext *YDNoteContext) error {
 	yfs.files = make(map[string]*YdNoteFile)
+	yfs.loadCache()
+
+	doYoudaoNoteLogin(ydContext, WEB_URL, yfs.startPull)
+	return nil
+}
+
+func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
+	defer ydContext.ContextCancel()
+
+	// 无论如何拉取远程根目录信息
+	topLevelFiles, err := yfs.listDir(ydContext, "/")
+	if err != nil {
+		log.Error().Err(err).Msg("list root dir fail")
+		return
+	}
+
+	var beginRemoteFileName string
+	for _, v := range topLevelFiles {
+		yfs.UpdateFile(v)
+
+		if v.FileMeta.Title == ydRemoteDir {
+			beginRemoteFileName = v.Name()
+		}
+	}
+
+	if len(beginRemoteFileName) > 0 {
+		// 只拉取某个目录
+		yfs.pullDir(ydContext, beginRemoteFileName)
+	} else {
+		// 拉取所有目录
+		for _, v := range topLevelFiles {
+			yfs.pullDir(ydContext, v.Name())
+		}
+	}
+
+}
+
+// 加载本地缓存文件
+func (yfs *YdFileSystem) loadCache() {
+	cf := localCacheDir(localFileInfo)
+	if _, inErr := os.Stat(cf); os.IsNotExist(inErr) {
+		return
+	}
+	data, err := os.ReadFile(cf)
+	if err != nil {
+		log.Error().Err(err).Msg("skip local cache file info")
+		return
+	}
+	err = jsoniter.Unmarshal(data, &yfs.files)
+	if err != nil {
+		log.Error().Err(err).Msg("skip local cache file info")
+		return
+	}
+	log.Info().Int("file_count", len(yfs.files)).Msg("load cache file info")
 }
 
 func (yfs *YdFileSystem) Open(name string) (fs.File, error) {

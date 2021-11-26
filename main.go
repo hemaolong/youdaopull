@@ -17,10 +17,9 @@ func main() {
 
 	ctx := CreateContext()
 
-	ys, err := createYdNoteSession()
+	yfs := YdFileSystem{}
+	err := yfs.Init(ctx)
 	if err != nil {
 		log.Fatal().Err(err).Msg("启动失败")
 	}
-
-	ys.start(ctx)
 }

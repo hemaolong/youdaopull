@@ -1,12 +1,16 @@
 package main
 
-import "path"
+import (
+	"context"
+	"path"
+)
 
 var (
 	ydLocalDir  string // 本地文件目录
 	ydRemoteDir string // 有道云笔记拉取的目录，只能是根目录
 
 	ydFileSystem = &YdFileSystem{}
+	ydContext    context.Context
 )
 
 const (
