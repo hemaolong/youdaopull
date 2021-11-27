@@ -55,9 +55,9 @@ func getQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 		}
 
 		var f *os.File
-		f, err = os.OpenFile(localCacheDir(pngFile), os.O_TRUNC|os.O_RDWR|os.O_CREATE, os.ModeType)
+		f, err = os.OpenFile(localCacheDir(pngFile), os.O_TRUNC|os.O_CREATE, 0o0755)
 		if err != nil {
-			return err
+			return fmt.Errorf("请手动删除cache中的文件(%w)", err)
 		}
 		err = png.Encode(f, img)
 		if err != nil {
