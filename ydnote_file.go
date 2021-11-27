@@ -121,7 +121,7 @@ type YdNoteFile struct {
 	}
 
 	FileMeta struct {
-		FizeSize          int64
+		FileSize          int64
 		ModifyTimeForSort int64
 		Resources         []YdResource
 		SourceURL         string
@@ -154,7 +154,7 @@ func (yf *YdNoteFile) Name() string {
 }
 
 func (yf *YdNoteFile) Size() int64 {
-	return yf.FileMeta.FizeSize
+	return yf.FileMeta.FileSize
 }
 func (yf *YdNoteFile) Mode() fs.FileMode {
 	if yf.IsDir() {
