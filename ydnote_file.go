@@ -209,26 +209,19 @@ func (yf *YdNoteFile) ReadDir(n int) ([]fs.DirEntry, error) {
 type YdFileSystem struct {
 	ydNoteSession
 
-	files map[string]*YdNoteFile // 所有文件，包含目录
+	files      map[string]*YdNoteFile // 所有文件，包含目录
+	cacheFiles map[string]*YdNoteFile
 }
 
 func (yfs *YdFileSystem) UpdateFile(f *YdNoteFile) {
-	if old, ok := yfs.files[f.Name()]; ok {
-		if old.IsUpdated(f) {
-			yfs.files[f.Name()] = f
-			log.Info().Dict("old", old.Dict()).Dict("new", f.Dict()).Str("opt", "u").Msg("file updated")
-		}
-		return
-	}
 	yfs.files[f.Name()] = f
-	log.Info().Dict("new", f.Dict()).Str("opt", "+").Msg("file add")
 }
 
 func (yfs *YdFileSystem) Init(ydContext *YDNoteContext) error {
 	yfs.files = make(map[string]*YdNoteFile)
-	yfs.loadCache()
+	yfs.cacheFiles = yfs.loadCache()
 
-	doYoudaoNoteLogin(ydContext, WEB_URL, yfs.startPull)
+	doYoudaoNoteLogin(ydContext, entryURL, yfs.startPull)
 	return nil
 }
 
@@ -250,12 +243,12 @@ func (yfs *YdFileSystem) walkRemoteFile(ydContext *YDNoteContext, parentName, pa
 	}
 }
 
-func (yfs *YdFileSystem) getFileLocalPath(f *YdNoteFile) string {
+func getFileLocalPath(files map[string]*YdNoteFile, f *YdNoteFile) string {
 	tmp := make([]string, 0, 10)
 	pf := f
 	var ok bool
 	for {
-		if pf, ok = yfs.files[pf.FileEntry.ParentID]; ok {
+		if pf, ok = files[pf.FileEntry.ParentID]; ok {
 			tmp = append(tmp, pf.FileMeta.Title)
 		} else {
 			break
@@ -271,6 +264,36 @@ func (yfs *YdFileSystem) getFileLocalPath(f *YdNoteFile) string {
 	return localFileDir(tmp...)
 }
 
+func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNoteFile) error {
+	// 增加、更新操作
+	for k, v := range newFiles {
+		if old, ok := cacheFiles[k]; ok {
+			if old.IsUpdated(v) {
+				downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
+				log.Info().Dict("old", old.Dict()).Dict("new", v.Dict()).Str("opt", "u").Msg("file updated")
+			} else {
+				log.Info().Dict("new", v.Dict()).Str("opt", "s").Msg("file skiped")
+			}
+		} else {
+			downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
+			log.Info().Dict("new", v.Dict()).Str("opt", "+").Msg("file add")
+		}
+	}
+
+	for k, v := range cacheFiles {
+		if _, ok := newFiles[k]; !ok {
+			os.Remove(getFileLocalPath(cacheFiles, v))
+			log.Info().Dict("old", v.Dict()).Str("opt", "-").Msg("file deleted")
+		}
+	}
+
+	data, err := jsoniter.Marshal(newFiles)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(localCacheDir(localFileInfo), data, 0o755)
+}
+
 func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
 	defer ydContext.ContextCancel()
 
@@ -280,14 +303,13 @@ func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
 	yfs.walkRemoteFile(ydContext, "/", "")
 	log.Info().Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("pull remote file info finish")
 
+	// 对比本地缓存，确定删除、更新、还是增加
+
 	begin = time.Now()
 	log.Info().Msg("start download remote file")
-	for _, v := range yfs.files {
-		if !v.IsDir() {
-			yfs.downloadFile(ydContext, v, yfs.getFileLocalPath(v))
-		}
-	}
-	log.Info().Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("download remote file finish")
+	cache := yfs.loadCache()
+	err := doDeltaPull(ydContext, cache, yfs.files)
+	log.Info().Err(err).Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("download remote file finish")
 
 	// var beginRemoteFileName string
 	// for _, v := range topLevelFiles {
@@ -311,22 +333,25 @@ func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
 }
 
 // 加载本地缓存文件
-func (yfs *YdFileSystem) loadCache() {
+func (yfs *YdFileSystem) loadCache() map[string]*YdNoteFile {
 	cf := localCacheDir(localFileInfo)
 	if _, inErr := os.Stat(cf); os.IsNotExist(inErr) {
-		return
+		return nil
 	}
 	data, err := os.ReadFile(cf)
 	if err != nil {
 		log.Error().Err(err).Msg("skip local cache file info")
-		return
+		return nil
 	}
-	err = jsoniter.Unmarshal(data, &yfs.files)
+
+	files := make(map[string]*YdNoteFile)
+	err = jsoniter.Unmarshal(data, &files)
 	if err != nil {
 		log.Error().Err(err).Msg("skip local cache file info")
-		return
+		return nil
 	}
-	log.Info().Int("file_count", len(yfs.files)).Msg("load cache file info")
+	log.Info().Int("file_count", len(files)).Msg("load cache file info")
+	return files
 }
 
 func (yfs *YdFileSystem) Open(name string) (fs.File, error) {

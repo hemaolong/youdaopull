@@ -40,7 +40,7 @@ func (ys *ydNoteSession) listDir(ydContext *YDNoteContext, parent string) ([]*Yd
 }
 
 // 获取目录内文件列表
-func (ys *ydNoteSession) downloadFile(ydContext *YDNoteContext, f *YdNoteFile, localPath string) error {
+func downloadFile(ydContext *YDNoteContext, f *YdNoteFile, localPath string) error {
 	u, err := url.Parse(downLoadURL)
 	if err != nil {
 		return err
