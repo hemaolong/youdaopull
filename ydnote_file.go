@@ -94,6 +94,17 @@ import (
 //         }
 //     },
 
+type YdResource struct {
+	ResourceId      string
+	ResourceType    int
+	ResourceSubType int
+	Version         int
+}
+
+// type YdEntries struct {
+// 	Entries []*YdNoteFile
+// }
+
 type YdNoteFile struct {
 	FileEntry struct {
 		ID                string
@@ -112,7 +123,7 @@ type YdNoteFile struct {
 	FileMeta struct {
 		FizeSize          int64
 		ModifyTimeForSort int64
-		Resources         []string
+		Resources         []YdResource
 		SourceURL         string
 		Title             string
 	}
@@ -123,6 +134,13 @@ type YdNoteFile struct {
 func (yf *YdNoteFile) IsUpdated(f *YdNoteFile) bool {
 	return f.Size() != yf.Size() || f.ModTime().Unix() != yf.ModTime().Unix()
 }
+
+// 收藏的笔记
+func (yf *YdNoteFile) GetSourceURL() string {
+	return yf.FileMeta.SourceURL
+}
+
+// 上传的笔记
 
 func (yf *YdNoteFile) Dict() *zerolog.Event {
 	return zerolog.Dict().Str("title", yf.FileMeta.Title).Str("name", yf.Name()).
@@ -214,34 +232,81 @@ func (yfs *YdFileSystem) Init(ydContext *YDNoteContext) error {
 	return nil
 }
 
+// 遍历线上目录，拉去所有文件简要信息，重组本地文件系统
+func (yfs *YdFileSystem) walkRemoteFile(ydContext *YDNoteContext, parentName, parentTitle string) {
+	// 无论如何拉取远程根目录信息
+	topLevelFiles, err := yfs.listDir(ydContext, parentName)
+	if err != nil {
+		log.Error().Str("parent_name", parentName).Str("parent_title", parentTitle).Err(err).Msg("list dir fail")
+		return
+	}
+
+	for _, v := range topLevelFiles {
+		yfs.UpdateFile(v)
+
+		if v.IsDir() {
+			yfs.walkRemoteFile(ydContext, v.Name(), v.FileMeta.Title)
+		}
+	}
+}
+
+func (yfs *YdFileSystem) getFileLocalPath(f *YdNoteFile) string {
+	tmp := make([]string, 0, 10)
+	pf := f
+	var ok bool
+	for {
+		if pf, ok = yfs.files[pf.FileEntry.ParentID]; ok {
+			tmp = append(tmp, pf.FileMeta.Title)
+		} else {
+			break
+		}
+	}
+	if len(tmp) >= 2 {
+		for i := 0; i < len(tmp)/2; i++ {
+			tmp[i], tmp[len(tmp)-i-1] = tmp[len(tmp)-i-1], tmp[i]
+		}
+	}
+	tmp = append(tmp, f.FileMeta.Title)
+
+	return localFileDir(tmp...)
+}
+
 func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
 	defer ydContext.ContextCancel()
 
 	// 无论如何拉取远程根目录信息
-	topLevelFiles, err := yfs.listDir(ydContext, "/")
-	if err != nil {
-		log.Error().Err(err).Msg("list root dir fail")
-		return
-	}
+	begin := time.Now()
+	log.Info().Msg("start pull remote file info")
+	yfs.walkRemoteFile(ydContext, "/", "")
+	log.Info().Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("pull remote file info finish")
 
-	var beginRemoteFileName string
-	for _, v := range topLevelFiles {
-		yfs.UpdateFile(v)
-
-		if v.FileMeta.Title == ydRemoteDir {
-			beginRemoteFileName = v.Name()
+	begin = time.Now()
+	log.Info().Msg("start download remote file")
+	for _, v := range yfs.files {
+		if !v.IsDir() {
+			yfs.downloadFile(ydContext, v, yfs.getFileLocalPath(v))
 		}
 	}
+	log.Info().Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("download remote file finish")
 
-	if len(beginRemoteFileName) > 0 {
-		// 只拉取某个目录
-		yfs.pullDir(ydContext, beginRemoteFileName)
-	} else {
-		// 拉取所有目录
-		for _, v := range topLevelFiles {
-			yfs.pullDir(ydContext, v.Name())
-		}
-	}
+	// var beginRemoteFileName string
+	// for _, v := range topLevelFiles {
+	// 	yfs.UpdateFile(v)
+
+	// 	if v.FileMeta.Title == ydRemoteDir {
+	// 		beginRemoteFileName = v.Name()
+	// 	}
+	// }
+
+	// if len(beginRemoteFileName) > 0 {
+	// 	// 只拉取某个目录
+	// 	yfs.pullDir(ydContext, beginRemoteFileName)
+	// } else {
+	// 	// 拉取所有目录
+	// 	for _, v := range topLevelFiles {
+	// 		yfs.pullDir(ydContext, v.Name())
+	// 	}
+	// }
 
 }
 

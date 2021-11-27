@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"image"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -42,13 +42,14 @@ func getQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 		}
 
 		// 下载图片到本地
-		resp, err := HTTPReq(ydContext, "GET", imgSrc, nil, 30)
+		resp, err := http.Get(imgSrc) // (ydContext, "GET", imgSrc, nil, 30)
 		if err != nil {
 			return err
 		}
+		defer resp.Body.Close()
 
 		var img image.Image
-		img, _, err = image.Decode(bytes.NewReader(resp))
+		img, _, err = image.Decode(resp.Body)
 		if err != nil {
 			return err
 		}
@@ -58,11 +59,11 @@ func getQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
 		err = png.Encode(f, img)
 		if err != nil {
 			return err
 		}
+		_ = f.Close()
 
 		log.Info().Str("file", localCacheDir(pngFile)).Msg("下载图片完成")
 		if err = printQRCode(img); err != nil {
@@ -75,22 +76,23 @@ func getQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 	}
 }
 
-func findCSTK(params []*network.CookieParam) string {
-	for _, v := range params {
-		if v.Name == "YNOTE_CSTK" {
-			return v.Value
-		}
-	}
-	return ""
-}
-func findCSTKEx(params []*network.Cookie) string {
-	for _, v := range params {
-		if v.Name == "YNOTE_CSTK" {
-			return v.Value
-		}
-	}
-	return ""
-}
+// func findCSTK(params []*network.CookieParam) string {
+// 	for _, v := range params {
+// 		if v.Name == "YNOTE_CSTK" {
+// 			return v.Value
+// 		}
+// 	}
+// 	return ""
+// }
+
+// func findCSTKEx(params []*network.Cookie) string {
+// 	for _, v := range params {
+// 		if v.Name == "YNOTE_CSTK" {
+// 			return v.Value
+// 		}
+// 	}
+// 	return ""
+// }
 
 // 加载Cookies
 func loadCookies(ydContext *YDNoteContext, cf string) chromedp.ActionFunc {
@@ -110,7 +112,7 @@ func loadCookies(ydContext *YDNoteContext, cf string) chromedp.ActionFunc {
 		if err = ydContext.Cookies.UnmarshalJSON(cookiesData); err != nil {
 			return
 		}
-		ydContext.Cstk = findCSTK(ydContext.Cookies.Cookies)
+		// ydContext.Cstk = findCSTK(ydContext.Cookies.Cookies)
 		log.Info().Str("cstk", ydContext.Cstk).Msg("加载到cookie")
 
 		// 设置cookies
@@ -132,11 +134,14 @@ func waitScanQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 			return
 		}
 
-		ydContext.Cstk = findCSTKEx(cookies)
-
 		// 3. 存储到临时文件
 		log.Info().Err(err).Str("file", cookieFile).RawJSON("cookie", cookiesData).Msg("存储cookie")
-		if err = ioutil.WriteFile(localCacheDir(cookieFile), cookiesData, 0755); err != nil {
+		if err = os.WriteFile(localCacheDir(cookieFile), cookiesData, 0755); err != nil {
+			return
+		}
+
+		err = loadCookies(ydContext, localCacheDir(cookieFile)).Do(ctx)
+		if err != nil {
 			return
 		}
 

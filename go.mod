@@ -9,7 +9,6 @@ require (
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/mdp/qrterminal/v3 v3.0.0
 	github.com/rs/zerolog v1.26.0
-	github.com/tidwall/gjson v1.11.0
 	golang.org/x/net v0.0.0-20210805182204-aaa1db679c0d
 )
 
@@ -23,8 +22,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.0 // indirect
 	golang.org/x/sys v0.0.0-20210809222454-d867a43fc93e // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
