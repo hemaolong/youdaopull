@@ -1,12 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -287,7 +287,7 @@ func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNo
 		}
 	}
 
-	data, err := jsoniter.Marshal(newFiles)
+	data, err := json.Marshal(newFiles)
 	if err != nil {
 		return err
 	}
@@ -345,7 +345,7 @@ func (yfs *YdFileSystem) loadCache() map[string]*YdNoteFile {
 	}
 
 	files := make(map[string]*YdNoteFile)
-	err = jsoniter.Unmarshal(data, &files)
+	err = json.Unmarshal(data, &files)
 	if err != nil {
 		log.Error().Err(err).Msg("skip local cache file info")
 		return nil

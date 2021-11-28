@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -9,7 +10,6 @@ import (
 	"net/url"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/publicsuffix"
 )
@@ -54,7 +54,7 @@ func HTTPReq(ctx *YDNoteContext, method, httpURL string, data interface{}, timeo
 	// var reqBody []byte
 	if data != nil {
 		var body []byte
-		body, err := jsoniter.Marshal(data)
+		body, err := json.Marshal(data)
 		if err != nil {
 			return nil, err
 		}

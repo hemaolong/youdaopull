@@ -170,7 +170,19 @@ func printQRCode(img image.Image) (err error) {
 	}
 
 	log.Info().Str("qrcode", res.String()).Msg("qrcode str")
-	qrterminal.Generate(res.String(), qrterminal.L, os.Stdout)
+	// config := qrterminal.Config{
+	// 	Level:     qrterminal.M,
+	// 	Writer:    os.Stdout,
+	// 	BlackChar: qrterminal.BLACK,
+	// 	WhiteChar: qrterminal.WHITE,
+	// 	QuietZone: 1,
+	// }
+	// if runtime.GOOS == "windows" {
+	// 	config.Writer = colorable.NewColorableStdout()
+	// 	// config.BlackChar = qrterminal.BLACK
+	// 	// config.WhiteChar = qrterminal.WHITE
+	// }
+	qrterminal.Generate(res.String(), qrterminal.M, terminalWriter)
 	return
 }
 
@@ -262,7 +274,7 @@ func doYoudaoNoteLogin(ydContext *YDNoteContext, url string, onLoginOk func(*YDN
 
 		// 以默认配置的数组为基础，覆写headless参数
 		// 当然也可以根据自己的需要进行修改，这个flag是浏览器的设置
-		append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", false))...,
+		append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", ydHeadless))...,
 	)
 	ctx, _ = chromedp.NewContext(
 		ctx,

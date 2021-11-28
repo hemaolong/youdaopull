@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"os"
 
-	jsoniter "github.com/json-iterator/go"
+	json "github.com/json-iterator/go"
 	"github.com/rs/zerolog/log"
 )
 
@@ -32,9 +32,9 @@ func (ys *ydNoteSession) listDir(ydContext *YDNoteContext, parent string) ([]*Yd
 
 	// result := make([]*YdNoteFile, 0, 30)
 	if respData[0] == '[' {
-		err = jsoniter.Unmarshal(respData, &result.Entries)
+		err = json.Unmarshal(respData, &result.Entries)
 	} else {
-		err = jsoniter.Unmarshal(respData, &result)
+		err = json.Unmarshal(respData, &result)
 	}
 	return result.Entries, err
 }
