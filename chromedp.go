@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"image"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"strings"
 	"time"
-
-	_ "image/jpeg"
-	"image/png"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
@@ -42,29 +38,10 @@ func getQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 		}
 
 		// 下载图片到本地
-		resp, err := http.Get(imgSrc) // (ydContext, "GET", imgSrc, nil, 30)
+		img, err := downloadImg(ydContext, imgSrc, localCacheDir(pngFile))
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
-
-		var img image.Image
-		img, _, err = image.Decode(resp.Body)
-		if err != nil {
-			return err
-		}
-
-		var f *os.File
-		f, err = os.OpenFile(localCacheDir(pngFile), os.O_TRUNC|os.O_CREATE, 0o0755)
-		if err != nil {
-			return fmt.Errorf("请手动删除cache中的文件(%w)", err)
-		}
-		err = png.Encode(f, img)
-		if err != nil {
-			return err
-		}
-		_ = f.Close()
-
 		log.Info().Str("file", localCacheDir(pngFile)).Msg("下载图片完成")
 		if err = printQRCode(img); err != nil {
 			return err
@@ -75,24 +52,6 @@ func getQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 		return
 	}
 }
-
-// func findCSTK(params []*network.CookieParam) string {
-// 	for _, v := range params {
-// 		if v.Name == "YNOTE_CSTK" {
-// 			return v.Value
-// 		}
-// 	}
-// 	return ""
-// }
-
-// func findCSTKEx(params []*network.Cookie) string {
-// 	for _, v := range params {
-// 		if v.Name == "YNOTE_CSTK" {
-// 			return v.Value
-// 		}
-// 	}
-// 	return ""
-// }
 
 // 加载Cookies
 func loadCookies(ydContext *YDNoteContext, cf string) chromedp.ActionFunc {
@@ -112,8 +71,7 @@ func loadCookies(ydContext *YDNoteContext, cf string) chromedp.ActionFunc {
 		if err = ydContext.Cookies.UnmarshalJSON(cookiesData); err != nil {
 			return
 		}
-		// ydContext.Cstk = findCSTK(ydContext.Cookies.Cookies)
-		log.Info().Str("cstk", ydContext.Cstk).Msg("加载到cookie")
+		log.Info().Msg("加载到cookie")
 
 		// 设置cookies
 		return network.SetCookies(ydContext.Cookies.Cookies).Do(ctx)

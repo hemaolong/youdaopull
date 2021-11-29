@@ -3,36 +3,21 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
-	"net/url"
+	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/net/publicsuffix"
 )
 
 func HTTPReq(ctx *YDNoteContext, method, httpURL string, data interface{}, timeoutSeconds int) ([]byte, error) {
-	var jar http.CookieJar
-	var err error
-	if len(ctx.Cookies.Cookies) > 0 {
-		var cs []*http.Cookie
-		for _, v := range ctx.Cookies.Cookies {
-			cs = append(cs, &http.Cookie{Name: v.Name,
-				Value:  v.Value,
-				Path:   v.Path,
-				Domain: v.Domain,
-			})
-
-			// fmt.Println(">>>>", v.Name, v.Value)
-		}
-		cookieURL, _ := url.Parse(httpURL)
-
-		jar, _ = cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
-		jar.SetCookies(cookieURL, cs)
-	}
 	client := &http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second,
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
@@ -47,11 +32,11 @@ func HTTPReq(ctx *YDNoteContext, method, httpURL string, data interface{}, timeo
 			TLSHandshakeTimeout:   time.Duration(timeoutSeconds) * time.Second,
 			ExpectContinueTimeout: time.Duration(timeoutSeconds) * time.Second,
 		},
-		Jar: jar,
+		Jar: ctx.GetHTTPCookies(httpURL),
 	}
 
 	var request *http.Request
-	// var reqBody []byte
+	var err error
 	if data != nil {
 		var body []byte
 		body, err := json.Marshal(data)
@@ -61,11 +46,11 @@ func HTTPReq(ctx *YDNoteContext, method, httpURL string, data interface{}, timeo
 		buf := bytes.NewBuffer(body)
 		// reqBody = buf.Bytes()
 		log.Trace().Str("url", httpURL).RawJSON("req", buf.Bytes()).Msg("post data request begin")
-		request, err = http.NewRequestWithContext(ctx.Context, "POST", httpURL, buf)
+		request, err = http.NewRequestWithContext(ctx.Context, method, httpURL, buf)
 		request.Header.Set("Content-Type", "application/json")
 
 	} else {
-		request, err = http.NewRequestWithContext(ctx.Context, "POST", httpURL, nil)
+		request, err = http.NewRequestWithContext(ctx.Context, method, httpURL, nil)
 		log.Trace().Str("url", httpURL).Msg("post data request begin")
 	}
 	if err != nil {
@@ -81,4 +66,38 @@ func HTTPReq(ctx *YDNoteContext, method, httpURL string, data interface{}, timeo
 
 	response, err := io.ReadAll(resp.Body)
 	return response, err
+}
+
+func downloadImg(ctx *YDNoteContext, httpURL string, localPath string) (image.Image, error) {
+	client := &http.Client{Jar: ctx.GetHTTPCookies(httpURL)}
+	request, err := http.NewRequestWithContext(ctx.Context, "GET", httpURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http request fail status:%d", resp.StatusCode)
+	}
+
+	var img image.Image
+	img, _, err = image.Decode(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("image formt(%s) err(%w)", resp.Header.Get("Content-Type"), err)
+	}
+
+	var f *os.File
+	f, err = os.OpenFile(localPath, os.O_TRUNC|os.O_CREATE, 0755)
+	if err != nil {
+		return nil, fmt.Errorf("请手动删除cache中的文件(%w)", err)
+	}
+	err = png.Encode(f, img)
+	if err != nil {
+		return nil, err
+	}
+	_ = f.Close()
+	return img, nil
 }

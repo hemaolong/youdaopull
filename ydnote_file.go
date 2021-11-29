@@ -2,9 +2,8 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -143,66 +142,29 @@ func (yf *YdNoteFile) GetSourceURL() string {
 // 上传的笔记
 
 func (yf *YdNoteFile) Dict() *zerolog.Event {
-	return zerolog.Dict().Str("title", yf.FileMeta.Title).Str("name", yf.Name()).
+	return zerolog.Dict().Str("name", yf.Name()).Str("id", yf.ID()).
 		Int64("size", yf.Size())
 }
 
 // fs.File
 // 名字不是唯一的，以id为准
-func (yf *YdNoteFile) Name() string {
+func (yf *YdNoteFile) ID() string {
 	return yf.FileEntry.ID
+}
+
+func (yf *YdNoteFile) Name() string {
+	return yf.FileEntry.Name
 }
 
 func (yf *YdNoteFile) Size() int64 {
 	return yf.FileMeta.FileSize
 }
-func (yf *YdNoteFile) Mode() fs.FileMode {
-	if yf.IsDir() {
-		return fs.ModeDir
-	}
-	return fs.ModeDevice
-}
+
 func (yf *YdNoteFile) ModTime() time.Time {
 	return time.Unix(yf.FileMeta.ModifyTimeForSort, 0)
 }
 func (yf *YdNoteFile) IsDir() bool {
 	return yf.FileEntry.Dir
-}
-
-func (yf *YdNoteFile) Sys() interface{} {
-	return nil
-}
-
-func (yf *YdNoteFile) Stat() (fs.FileInfo, error) {
-	return yf, nil
-}
-
-func (yf *YdNoteFile) Read([]byte) (int, error) {
-	return 0, nil
-}
-func (yf *YdNoteFile) Close() error {
-	return nil
-}
-
-// fs.DirEntry
-func (yf *YdNoteFile) Type() fs.FileMode {
-	return yf.Mode()
-}
-
-func (yf *YdNoteFile) Info() (fs.FileInfo, error) {
-	return yf.Stat()
-}
-
-// fs.ReadDir
-func (yf *YdNoteFile) ReadDir(n int) ([]fs.DirEntry, error) {
-	result := make([]fs.DirEntry, 0, 30)
-	if n < 0 {
-		n = len(yf.Children)
-	}
-	for i := 0; i < n; i++ {
-		result = append(result, yf.Children[i])
-	}
-	return result, nil
 }
 
 // 本地文件缓存信息，用于增量拉取
@@ -214,7 +176,7 @@ type YdFileSystem struct {
 }
 
 func (yfs *YdFileSystem) UpdateFile(f *YdNoteFile) {
-	yfs.files[f.Name()] = f
+	yfs.files[f.ID()] = f
 }
 
 func (yfs *YdFileSystem) Init(ydContext *YDNoteContext) error {
@@ -238,7 +200,7 @@ func (yfs *YdFileSystem) walkRemoteFile(ydContext *YDNoteContext, parentName, pa
 		yfs.UpdateFile(v)
 
 		if v.IsDir() {
-			yfs.walkRemoteFile(ydContext, v.Name(), v.FileMeta.Title)
+			yfs.walkRemoteFile(ydContext, v.ID(), v.Name())
 		}
 	}
 }
@@ -248,8 +210,12 @@ func getFileLocalPath(files map[string]*YdNoteFile, f *YdNoteFile) string {
 	pf := f
 	var ok bool
 	for {
+		// 共享给我的文档
+		if pf.FileEntry.ParentID == "-2" {
+			tmp = append(tmp, "_sharein_")
+		}
 		if pf, ok = files[pf.FileEntry.ParentID]; ok {
-			tmp = append(tmp, pf.FileMeta.Title)
+			tmp = append(tmp, pf.Name())
 		} else {
 			break
 		}
@@ -259,39 +225,68 @@ func getFileLocalPath(files map[string]*YdNoteFile, f *YdNoteFile) string {
 			tmp[i], tmp[len(tmp)-i-1] = tmp[len(tmp)-i-1], tmp[i]
 		}
 	}
-	tmp = append(tmp, f.FileMeta.Title)
+	tmp = append(tmp, f.Name())
 
 	return localFileDir(tmp...)
 }
 
+// 增量拉取，只拉取修改日志或者文件内容发生变化的日志
 func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNoteFile) error {
+	refURLs := map[string]*YdNoteFile{}
+
 	// 增加、更新操作
 	for k, v := range newFiles {
+		if v.IsDir() {
+			continue
+		}
+
+		if !strings.Contains(v.Name(), ".") {
+			log.Info().Str("name", v.Name()).Msg("----")
+		}
+
+		// 收藏的链接，不直接下载
+		if len(v.GetSourceURL()) > 0 {
+			refURLs[v.ID()] = v
+			continue
+		}
+
 		if old, ok := cacheFiles[k]; ok {
 			if old.IsUpdated(v) {
-				downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
-				log.Info().Dict("old", old.Dict()).Dict("new", v.Dict()).Str("opt", "u").Msg("file updated")
+				err := downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
+				log.Info().Err(err).Dict("old", old.Dict()).Dict("new", v.Dict()).Str("opt", "u").Msg("file updated")
 			} else {
 				log.Info().Dict("new", v.Dict()).Str("opt", "s").Msg("file skiped")
 			}
 		} else {
-			downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
-			log.Info().Dict("new", v.Dict()).Str("opt", "+").Msg("file add")
+			err := downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
+			log.Info().Err(err).Dict("new", v.Dict()).Str("opt", "+").Msg("file add")
 		}
 	}
 
+	// 链接不直接下载，只输出链接列表？
+	if len(refURLs) > 0 {
+		data, _ := json.MarshalIndent(refURLs, "", " ")
+		err := os.WriteFile(localCacheDir(refFileInfo), data, 0755)
+		log.Info().Err(err).Int("file_count", len(refURLs)).Msg("save ref file info")
+	}
+
+	// 删除本地存在，远程不存在的文件
 	for k, v := range cacheFiles {
+		if v.IsDir() {
+			continue
+		}
+
 		if _, ok := newFiles[k]; !ok {
 			os.Remove(getFileLocalPath(cacheFiles, v))
 			log.Info().Dict("old", v.Dict()).Str("opt", "-").Msg("file deleted")
 		}
 	}
 
-	data, err := json.Marshal(newFiles)
+	data, err := json.MarshalIndent(newFiles, "", " ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(localCacheDir(localFileInfo), data, 0o755)
+	return os.WriteFile(localCacheDir(localFileInfo), data, 0755)
 }
 
 func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
@@ -300,36 +295,16 @@ func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
 	// 无论如何拉取远程根目录信息
 	begin := time.Now()
 	log.Info().Msg("start pull remote file info")
-	yfs.walkRemoteFile(ydContext, "/", "")
+	yfs.walkRemoteFile(ydContext, "/", "")         // 拉取我的笔记列表
+	yfs.walkRemoteFile(ydContext, "_myshare_", "") // 拉取与我分享的笔记列表
 	log.Info().Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("pull remote file info finish")
 
 	// 对比本地缓存，确定删除、更新、还是增加
-
 	begin = time.Now()
 	log.Info().Msg("start download remote file")
 	cache := yfs.loadCache()
 	err := doDeltaPull(ydContext, cache, yfs.files)
 	log.Info().Err(err).Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("download remote file finish")
-
-	// var beginRemoteFileName string
-	// for _, v := range topLevelFiles {
-	// 	yfs.UpdateFile(v)
-
-	// 	if v.FileMeta.Title == ydRemoteDir {
-	// 		beginRemoteFileName = v.Name()
-	// 	}
-	// }
-
-	// if len(beginRemoteFileName) > 0 {
-	// 	// 只拉取某个目录
-	// 	yfs.pullDir(ydContext, beginRemoteFileName)
-	// } else {
-	// 	// 拉取所有目录
-	// 	for _, v := range topLevelFiles {
-	// 		yfs.pullDir(ydContext, v.Name())
-	// 	}
-	// }
-
 }
 
 // 加载本地缓存文件
@@ -354,21 +329,64 @@ func (yfs *YdFileSystem) loadCache() map[string]*YdNoteFile {
 	return files
 }
 
-func (yfs *YdFileSystem) Open(name string) (fs.File, error) {
-	if f, ok := yfs.files[name]; ok {
-		return f, nil
-	}
-	return nil, fmt.Errorf("file not found:%s", name)
-}
+// func (yfs *YdFileSystem) Open(name string) (fs.File, error) {
+// 	if f, ok := yfs.files[name]; ok {
+// 		return f, nil
+// 	}
+// 	return nil, fmt.Errorf("file not found:%s", name)
+// }
 
-func (yfs *YdFileSystem) ReadDir(name string) ([]fs.DirEntry, error) {
-	f, err := yfs.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	if stat, _ := f.Stat(); !stat.IsDir() {
-		return nil, fmt.Errorf("%s is not dir", name)
-	}
+// func (yfs *YdFileSystem) ReadDir(name string) ([]fs.DirEntry, error) {
+// 	f, err := yfs.Open(name)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	if stat, _ := f.Stat(); !stat.IsDir() {
+// 		return nil, fmt.Errorf("%s is not dir", name)
+// 	}
 
-	return nil, nil
-}
+// 	return nil, nil
+// }
+
+// func (yf *YdNoteFile) Mode() fs.FileMode {
+// 	if yf.IsDir() {
+// 		return fs.ModeDir
+// 	}
+// 	return fs.ModeDevice
+// }
+
+// func (yf *YdNoteFile) Sys() interface{} {
+// 	return nil
+// }
+
+// func (yf *YdNoteFile) Stat() (fs.FileInfo, error) {
+// 	return yf, nil
+// }
+
+// func (yf *YdNoteFile) Read([]byte) (int, error) {
+// 	return 0, nil
+// }
+// func (yf *YdNoteFile) Close() error {
+// 	return nil
+// }
+
+// fs.DirEntry
+// func (yf *YdNoteFile) Type() fs.FileMode {
+// 	return yf.Mode()
+// }
+
+// func (yf *YdNoteFile) Info() (fs.FileInfo, error) {
+// 	return yf.Stat()
+// }
+
+// fs.ReadDir
+// func (yf *YdNoteFile) ReadDir(n int) ([]fs.DirEntry, error) {
+// 	result := make([]fs.DirEntry, 0, 30)
+// 	if n < 0 {
+// 		n = len(yf.Children)
+// 	}
+// 	for i := 0; i < n; i++ {
+// 		result = append(result, yf.Children[i])
+// 	}
+// 	return result, nil
+// }

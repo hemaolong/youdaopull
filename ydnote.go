@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
+	"path"
+	"path/filepath"
+	"strings"
 
-	json "github.com/json-iterator/go"
 	"github.com/rs/zerolog/log"
 )
 
@@ -16,9 +19,11 @@ type ydNoteSession struct {
 func (ys *ydNoteSession) listDir(ydContext *YDNoteContext, parent string) ([]*YdNoteFile, error) {
 	var url string
 	if parent == "/" {
-		url = fmt.Sprintf(listEntireByParentPath, ydContext.Cstk, parent)
+		url = fmt.Sprintf(listEntireByParentPath, parent)
+	} else if parent == "_myshare_" {
+		url = listEntriesRefNoteURL
 	} else {
-		url = fmt.Sprintf(listEntireByParentID, parent, ydContext.Cstk)
+		url = fmt.Sprintf(listEntireByParentID, parent)
 	}
 	respData, err := HTTPReq(ydContext, "GET", url, nil, 60)
 	if err != nil {
@@ -36,135 +41,69 @@ func (ys *ydNoteSession) listDir(ydContext *YDNoteContext, parent string) ([]*Yd
 	} else {
 		err = json.Unmarshal(respData, &result)
 	}
+
+	// 为了可读性，本地用Title作为文件名，但是操作系统对文件名/目录名有特殊要求，需要转换
+	for _, v := range result.Entries {
+		v.FileMeta.Title, err = Filenamify(v.FileMeta.Title, Options{Replacement: "_", MaxLength: 200})
+		if err != nil {
+			log.Error().Err(err).Str("name", v.Name()).Msg("filenamify fail")
+		}
+	}
+
 	return result.Entries, err
 }
 
 // 获取目录内文件列表
 func downloadFile(ydContext *YDNoteContext, f *YdNoteFile, localPath string) error {
-	u, err := url.Parse(downLoadURL)
+	u, err := url.Parse(downloadNoteURL)
 	if err != nil {
 		return err
 	}
 	q := u.Query()
-	q.Add("cstk", ydContext.Cstk)
-	q.Add("fileId", f.Name())
+	q.Add("fileId", f.ID())
 	q.Add("version", "-1")
 	q.Add("editorType", "-1")
 	u.RawQuery = q.Encode()
 
 	respData, err := HTTPReq(ydContext, "POST", u.String(),
 		map[string]interface{}{
-			"fileId":     f.Name(),
+			"fileId":     f.ID(),
 			"version":    -1,
 			"convert":    "true",
 			"editorType": 1,
-			"cstk":       ydContext.Cstk,
 		}, 60)
 	if err != nil {
 		return err
 	}
-	log.Info().Str("name", f.Name()).Str("title", f.FileMeta.Title).
+	log.Info().Str("name", f.ID()).Str("name", f.Name()).
 		Int("file_size", len(respData)).
 		Str("local_path", localPath).
 		Msg("download file")
 
-	return os.WriteFile(localPath, respData, 0755)
+	err = os.WriteFile(localPath, respData, 0755)
+	if err != nil {
+		return err
+	}
+
+	// 下载笔记相关资源，例如图片
+	if len(f.FileMeta.Resources) > 0 {
+		ext := filepath.Ext(f.Name())
+		resPath := strings.TrimSuffix(localPath, ext)
+		resPath = resPath + "_res"
+		err = os.MkdirAll(resPath, 0755)
+		if err != nil {
+			return err
+		}
+		for _, res := range f.FileMeta.Resources {
+			resRemoteURL := fmt.Sprintf(downloadResURL, res.Version, res.ResourceId)
+			resLocalPath := path.Join(resPath, res.ResourceId+".png")
+			_, err = downloadImg(ydContext, resRemoteURL, resLocalPath)
+			if err != nil {
+				log.Error().Err(err).Dict("file", f.Dict()).Str("res_remote_url", resRemoteURL).Str("res_local_path", resLocalPath).Msg("download res fail")
+				continue
+			}
+			log.Info().Err(err).Dict("file", f.Dict()).Str("res_remote_url", resRemoteURL).Str("res_local_path", resLocalPath).Msg("download res ok")
+		}
+	}
+	return nil
 }
-
-// // 获取有道云笔记指定文件夹 id，目前指定文件夹只能为顶层文件夹，如果要指定文件夹下面的文件夹，请自己改用递归实现
-// func (ys *ydNoteSession) getDirID(ydContext *YDNoteContext, rootID, ydnoteDir string) (string, error) {
-// 	respData, err := HTTPReqJSON(ydContext, "GET", fmt.Sprintf(DIR_MES_URL, rootID, ydnoteDir), nil, 10)
-// 	if err != nil {
-// 		return "", fmt.Errorf("有道路径解析错误(%w)", err)
-// 	}
-
-// 	entryID := respData.Get(fmt.Sprintf("entries.%s", ydnoteDir)).Str
-// 	if len(entryID) == 0 {
-// 		return "", fmt.Errorf("有道云笔记修改了接口地址，此脚本暂时不能使用！请提 issue2")
-// 	}
-
-// 	return entryID, nil
-// }
-
-// func (ys *ydNoteSession) pullDir(ydContext *YDNoteContext, parent string) {
-// 	// 获取根目录所有文件
-// 	rootID, err := ys.listDir(ydContext, parent)
-// 	if err != nil {
-// 		log.Error().Err(err).Msg("有道云笔记获取根目录文件夹错误")
-// 		return
-// 	}
-// 	log.Info().Int("根目录文件数量", len(rootID)).Msg("开始下载笔记")
-
-// }
-
-// // 下载所有笔记
-// func (ys *ydNoteSession) pullAll(ydContext *YDNoteContext, ydnoteDir, rootID string) error {
-// 	// 检查本地路径，不存在则创建
-
-// 	// 此处设置，后面会用，避免传参
-// 	// ys.localDir = localDir
-
-// 	// 检查有道路径
-// 	if len(ydnoteDir) != 0 {
-// 		rootID, err := ys.getDirID(ydContext, rootID, ydnoteDir)
-// 		if err != nil {
-// 			return err
-// 		}
-
-// 		log.Info().Str("dir", ydnoteDir).Str("root_id", rootID).Msg("")
-// 		if len(rootID) == 0 {
-// 			return fmt.Errorf("此文件夹「%s」不是顶层文件夹，暂不能下载！", ydnoteDir)
-// 		}
-// 	}
-
-// 	return nil
-// }
-
-// // 递归遍历，根据 id 找到目录下的所有文件
-// func (ys *ydNoteSession) walkDir(ydContext *YDNoteContext, id, localDir string) error {
-// 	url := fmt.Sprintf(DIR_MES_URL, id, ydContext.Cstk)
-// 	resp, err := HTTPReqJSON(ydContext, "GET", url, nil, 10)
-// 	if err != nil {
-// 		return fmt.Errorf("遍历子目录错误(%w)", err)
-// 	}
-
-// 	entries := resp.Get("entries").Array()
-// 	if len(entries) == 0 {
-// 		return fmt.Errorf("有道云笔记修改了接口地址，此脚本暂时不能使用！请提 issue3")
-// 	}
-
-// 	log.Info().Interface("entries", entries).Msg("xxx")
-// 	// for _, subDir := range entries {
-// 	// 	switch entries.Type {
-// 	// 	case gjson.String: // 文件
-// 	// 	case gjson.JSON: // 目录，继续遍历
-// 	// 		for k, v := range subDir {
-// 	// 			log.Info().Str("k", k).Interface("v", v).Msg("---------")
-// 	// 		}
-
-// 	// 	default:
-// 	// 		return fmt.Errorf("有道云笔记修改了接口地址，此脚本暂时不能使用！请提 issue3")
-// 	// 	}
-// 	// }
-// 	return nil
-
-// }
-
-// func (ys *ydNoteSession) start(ctx *YDNoteContext) {
-// 	doYoudaoNoteLogin(ctx, WEB_URL, ys.startPull)
-// }
-
-// func createYdNoteSession() (*ydNoteSession, error) {
-// 	dirs := []string{ydLocalDir, localFileDir(""), localCacheDir("")}
-// 	for _, dir := range dirs {
-// 		_, err := os.Stat(dir)
-// 		if err != nil {
-// 			err := os.MkdirAll(dir, 0755)
-// 			if err != nil {
-// 				return nil, fmt.Errorf("创建本地目录:%s失败(%w)，没有权限？", dir, err)
-// 			}
-// 		}
-// 	}
-
-// 	return &ydNoteSession{}, nil
-// }
