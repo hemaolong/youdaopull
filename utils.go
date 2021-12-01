@@ -90,7 +90,7 @@ func downloadImg(ctx *YDNoteContext, httpURL string, localPath string) (image.Im
 	}
 
 	var f *os.File
-	f, err = os.OpenFile(localPath, os.O_TRUNC|os.O_CREATE, 0755)
+	f, err = os.OpenFile(localPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0755)
 	if err != nil {
 		return nil, fmt.Errorf("请手动删除cache中的文件(%w)", err)
 	}
