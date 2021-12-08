@@ -14,8 +14,8 @@ var (
 	ydRemoteDir string // 有道云笔记拉取的目录，只能是根目录
 	ydHeadless  bool   // 是否打开chrome浏览器
 
-	ydFileSystem = &YdFileSystem{}
-	ydContext    context.Context
+	// ydFileSystem = &YdFileSystem{}
+	ydContext context.Context
 
 	terminalWriter io.Writer
 )

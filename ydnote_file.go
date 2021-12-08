@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -240,9 +239,9 @@ func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNo
 			continue
 		}
 
-		if !strings.Contains(v.Name(), ".") {
-			log.Info().Str("name", v.Name()).Msg("----")
-		}
+		// if !strings.Contains(v.Name(), ".") {
+		// 	log.Info().Str("name", v.Name()).Msg("----")
+		// }
 
 		// 收藏的链接，不直接下载
 		if len(v.GetSourceURL()) > 0 {

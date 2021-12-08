@@ -9,7 +9,7 @@
 - linux 等其他平台请下载代码自行编译
 
 - 输出
-  - $yn_local_dir/cache//file_info 本地笔记缓存信息，包括大小、修改日志等
+  - $yn_local_dir/cache/file_info 本地笔记缓存信息，包括大小、修改日志等
   - $yn_local_dir/cache/ref_file_info.json 收藏笔记列表
   - $yn_local_dir/file/下载的笔记
 
