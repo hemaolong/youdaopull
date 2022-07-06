@@ -46,7 +46,8 @@ const (
 	localFileInfo = "file_info.json" // 本地文件信息，保留每个文件的版本信息避免每次都拉
 	refFileInfo   = "ref_file_info.json"
 
-	loginSel = `body > ydoc-app > div > div:nth-child(1) > header > div > div > div.top-right > div.own-info > img`
+	// loginSel = `body > ydoc-app > div > div:nth-child(1) > header > div > div > div.top-right > div.own-info > img`
+	loginSel = `#flexible-left > div.sidebar.electron-drag > div.sidebar-header > app-personal > div > div.personal-info > img`
 )
 
 func localFileDir(subDir ...string) string {
