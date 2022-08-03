@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -155,6 +159,17 @@ func (yf *YdNoteFile) Name() string {
 	return yf.FileEntry.Name
 }
 
+func (yf *YdNoteFile) NeedExport2Docx() bool {
+	fileExtension := filepath.Ext(yf.FileEntry.Name)
+	return fileExtension == ".note" || fileExtension == ".html" || fileExtension == ""
+}
+
+func (yf *YdNoteFile) GetExport2DocxName() string {
+	fileExtension := filepath.Ext(yf.FileEntry.Name)
+
+	return strings.TrimSpace(strings.TrimSuffix(yf.FileEntry.Name, fileExtension)) + ".docx"
+}
+
 func (yf *YdNoteFile) Size() int64 {
 	return yf.FileMeta.FileSize
 }
@@ -184,6 +199,40 @@ func (yfs *YdFileSystem) Init(ydContext *YDNoteContext) error {
 
 	doYoudaoNoteLogin(ydContext, entryURL, yfs.startPull)
 	return nil
+}
+
+func (yfs *YdFileSystem) GetFileExportFullPath(id string) (string, error) {
+	result := []string{}
+	curID := id
+	for {
+		f, ok := yfs.files[curID]
+		if !ok {
+			break
+		}
+		if len(result) == 0 {
+			result = append(result, trimFileName(f.Name()))
+		} else {
+			result = append(result, f.Name())
+		}
+
+		curID = f.FileEntry.ParentID
+		if len(curID) == 0 {
+			break
+		}
+	}
+
+	reverseResult := make([]string, 0, len(result))
+	for i := len(result) - 1; i >= 0; i-- {
+		reverseResult = append(reverseResult, result[i])
+	}
+
+	if len(reverseResult) == 0 {
+		return "", fmt.Errorf("fail to find file in system id:%s", id)
+	}
+	fullPathStr := localExpordWordDir(reverseResult...)
+	fullPathStr = strings.TrimSuffix(fullPathStr, ".note")
+	fullPathStr += ".docx"
+	return filepath.Abs(fullPathStr)
 }
 
 // 遍历线上目录，拉去所有文件简要信息，重组本地文件系统
@@ -230,7 +279,7 @@ func getFileLocalPath(files map[string]*YdNoteFile, f *YdNoteFile) string {
 }
 
 // 增量拉取，只拉取修改日志或者文件内容发生变化的日志
-func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNoteFile) error {
+func doDeltaPull(ctx context.Context, ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNoteFile) error {
 	refURLs := map[string]*YdNoteFile{}
 
 	// 增加、更新操作
@@ -246,19 +295,44 @@ func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNo
 		// 收藏的链接，不直接下载
 		if len(v.GetSourceURL()) > 0 {
 			refURLs[v.ID()] = v
-			continue
 		}
 
-		if old, ok := cacheFiles[k]; ok {
-			if old.IsUpdated(v) {
-				err := downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
-				log.Info().Err(err).Dict("old", old.Dict()).Dict("new", v.Dict()).Str("opt", "u").Msg("file updated")
+		var skipReason string
+		if v.FileMeta.FileSize > 0 {
+			if old, ok := cacheFiles[k]; ok {
+				if v.NeedExport2Docx() {
+					fullPath, _ := ydContext.yfs.GetFileExportFullPath(v.ID())
+					if _, inErr := os.Stat(fullPath); inErr == nil {
+						skipReason = "exist(docx)"
+					}
+				} else if !old.IsUpdated(v) {
+					fullPath := getFileLocalPath(newFiles, v)
+					if _, inErr := os.Stat(fullPath); inErr == nil {
+						skipReason = "exist(plain)"
+					}
+				}
 			} else {
-				log.Info().Dict("new", v.Dict()).Str("opt", "s").Msg("file skiped")
+				if v.NeedExport2Docx() {
+					fullPath, _ := ydContext.yfs.GetFileExportFullPath(v.ID())
+					if _, inErr := os.Stat(fullPath); inErr == nil {
+						skipReason = "exist(docx)"
+					}
+				}
 			}
 		} else {
-			err := downloadFile(ydContext, v, getFileLocalPath(newFiles, v))
-			log.Info().Err(err).Dict("new", v.Dict()).Str("opt", "+").Msg("file add")
+			if v.FileEntry.ParentID == "-2" {
+				skipReason = "回收站"
+			} else if v.NeedExport2Docx() {
+				skipReason = "empty(docx)"
+			} else {
+				skipReason = "empty"
+			}
+		}
+		if len(skipReason) > 0 {
+			log.Info().Dict("new", v.Dict()).Str("opt", skipReason).Msg("file skiped")
+		} else {
+			err := downloadFile(ctx, ydContext, v, getFileLocalPath(newFiles, v))
+			log.Info().Err(err).Dict("new", v.Dict()).Str("opt", "+").Msg("file download")
 		}
 	}
 
@@ -276,7 +350,7 @@ func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNo
 		}
 
 		if _, ok := newFiles[k]; !ok {
-			os.Remove(getFileLocalPath(cacheFiles, v))
+			// os.Remove(getFileLocalPath(cacheFiles, v)) // 不再真正删除
 			log.Info().Dict("old", v.Dict()).Str("opt", "-").Msg("file deleted")
 		}
 	}
@@ -288,7 +362,7 @@ func doDeltaPull(ydContext *YDNoteContext, cacheFiles, newFiles map[string]*YdNo
 	return os.WriteFile(localCacheDir(localFileInfo), data, 0755)
 }
 
-func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
+func (yfs *YdFileSystem) startPull(ctx context.Context, ydContext *YDNoteContext) {
 	defer ydContext.ContextCancel()
 
 	// 无论如何拉取远程根目录信息
@@ -302,7 +376,20 @@ func (yfs *YdFileSystem) startPull(ydContext *YDNoteContext) {
 	begin = time.Now()
 	log.Info().Msg("start download remote file")
 	cache := yfs.loadCache()
-	err := doDeltaPull(ydContext, cache, yfs.files)
+	ydContext.yfs = yfs
+	err := doDeltaPull(ctx, ydContext, cache, yfs.files)
+
+	// Wait all finish
+	waitUntil(time.Now(), time.Second*300, ctx, func() bool {
+		count := 0
+		downloadFileAbsPath.Range(func(k, _ interface{}) bool {
+			count++
+			log.Info().Interface("file", k).Msg("wait file to download finish")
+			return false
+		})
+
+		return count == 0
+	})
 	log.Info().Err(err).Dur("cost", time.Since(begin)).Int("file_count", len(yfs.files)).Msg("download remote file finish")
 }
 

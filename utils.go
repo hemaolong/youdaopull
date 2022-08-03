@@ -39,9 +39,13 @@ func HTTPReq(ctx *YDNoteContext, method, httpURL string, data interface{}, timeo
 	var err error
 	if data != nil {
 		var body []byte
-		body, err := json.Marshal(data)
-		if err != nil {
-			return nil, err
+		if b, ok := data.([]byte); ok {
+			body = b
+		} else {
+			body, err = json.Marshal(data)
+			if err != nil {
+				return nil, err
+			}
 		}
 		buf := bytes.NewBuffer(body)
 		// reqBody = buf.Bytes()
@@ -58,10 +62,10 @@ func HTTPReq(ctx *YDNoteContext, method, httpURL string, data interface{}, timeo
 	}
 
 	resp, err := client.Do(request)
-	log.Trace().Interface("resp_head", resp.Header).Msg("post data resp")
 	if err != nil {
 		return nil, err
 	}
+	log.Trace().Interface("resp_head", resp.Header).Msg("post data resp")
 	defer resp.Body.Close()
 
 	response, err := io.ReadAll(resp.Body)

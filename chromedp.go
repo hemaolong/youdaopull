@@ -6,9 +6,13 @@ import (
 	"image"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/chromedp/cdproto"
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/target"
@@ -78,7 +82,7 @@ func loadCookies(ydContext *YDNoteContext, cf string) chromedp.ActionFunc {
 	}
 }
 
-func waitScanQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
+func saveAndUseCookies(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 	return func(ctx context.Context) (err error) {
 		cookies, err := network.GetAllCookies().Do(ctx)
 		log.Info().Err(err).Msg("开始获取cookie")
@@ -103,10 +107,12 @@ func waitScanQRCode(ydContext *YDNoteContext, sel string) chromedp.ActionFunc {
 			return
 		}
 
-		err = chromedp.Click(sel).Do(ctx)
-		log.Info().Err(err).Msg("关闭扫码界面")
-		if err != nil {
-			return
+		if len(sel) > 0 {
+			err = chromedp.Click(sel).Do(ctx)
+			log.Info().Err(err).Msg("关闭扫码界面")
+			if err != nil {
+				return
+			}
 		}
 		return
 	}
@@ -144,6 +150,14 @@ func printQRCode(img image.Image) (err error) {
 	return
 }
 
+func isWXLogin() bool {
+	return ydLoginMode == "wx"
+}
+
+func isMobileVerificationCodeLogin() bool {
+	return ydLoginMode == "mvc"
+}
+
 // 登陆
 func doLogin(ydContext *YDNoteContext, url string) chromedp.ActionFunc {
 	return func(ctx context.Context) (err error) {
@@ -153,6 +167,11 @@ func doLogin(ydContext *YDNoteContext, url string) chromedp.ActionFunc {
 		}
 
 		err = chromedp.Navigate(url).Do(ctx)
+		if err != nil {
+			return
+		}
+
+		err = chromedp.Sleep(time.Second).Do(ctx)
 		if err != nil {
 			return
 		}
@@ -170,10 +189,20 @@ func doLogin(ydContext *YDNoteContext, url string) chromedp.ActionFunc {
 			return
 		}
 
+		log.Info().Msg("没有cookie，开始登陆...")
 		// 不在登陆状态，使用二维码登陆
-		log.Info().Msg("没有cookie，开始微信登陆...")
-		if err = doQRCodeLogin(ydContext).Do(ctx); err != nil {
-			return
+		if isWXLogin() {
+			if err = doQRCodeLogin(ydContext).Do(ctx); err != nil {
+				return
+			}
+		} else if isMobileVerificationCodeLogin() {
+			if err = doMobileVerificationLogin(ydContext).Do(ctx); err != nil {
+				return
+			}
+		} else {
+			if err = doThirdPartyLogin(ydContext).Do(ctx); err != nil {
+				return
+			}
 		}
 		return
 	}
@@ -207,6 +236,41 @@ func doQRCodeLogin(ydContext *YDNoteContext) chromedp.ActionFunc {
 	}
 }
 
+//  手机验证码登陆
+func doMobileVerificationLogin(ydContext *YDNoteContext) chromedp.ActionFunc {
+	return func(ctx context.Context) (err error) {
+		if err := chromedp.Run(ctx,
+			chromedp.WaitVisible(loginSel),
+			saveAndUseCookies(ydContext, "")); err != nil {
+			log.Fatal().Err(err).Msg("")
+		}
+		return
+	}
+}
+
+// 二维码登陆
+func doThirdPartyLogin(ydContext *YDNoteContext) chromedp.ActionFunc {
+	return func(ctx context.Context) (err error) {
+		// 获得新打开的第一个非空页面-微信登陆（微信登陆另起一个新页面）
+		ch := chromedp.WaitNewTarget(ctx, func(info *target.Info) bool {
+			if info.URL != "" {
+				log.Info().Str("url", info.URL).Msg("登陆界面已经打开")
+				return true
+			}
+			return false
+		})
+
+		// 等待登陆页签打开
+		newCtx, cancel := chromedp.NewContext(ctx, chromedp.WithTargetID(<-ch))
+		defer cancel()
+		if err := chromedp.Run(newCtx,
+			hdlThirdPartyLogin(ydContext)); err != nil {
+			log.Fatal().Err(err).Msg("")
+		}
+		return
+	}
+}
+
 // 处理二维码
 func hdlQRCode(ydContext *YDNoteContext, sel string) chromedp.Tasks {
 	return chromedp.Tasks{
@@ -214,19 +278,37 @@ func hdlQRCode(ydContext *YDNoteContext, sel string) chromedp.Tasks {
 		// 获取并且打印二维码
 		getQRCode(ydContext, sel),
 		chromedp.WaitReady("#close", chromedp.ByQuery),
-		waitScanQRCode(ydContext, "#close"),
+		saveAndUseCookies(ydContext, "#close"),
 	}
 }
 
-func doDownload(ydContext *YDNoteContext, onLoginOk func(*YDNoteContext)) chromedp.ActionFunc {
+// 手机验证码登陆
+func hdlMobileVerificationCodeLogin(ydContext *YDNoteContext) chromedp.Tasks {
+	return chromedp.Tasks{
+		// 等待关闭按钮
+		chromedp.WaitReady("#close", chromedp.ByQuery),
+		saveAndUseCookies(ydContext, "#close"),
+	}
+}
+
+// 处理普通登陆结果
+func hdlThirdPartyLogin(ydContext *YDNoteContext) chromedp.Tasks {
+	return chromedp.Tasks{
+		// 等待关闭按钮
+		chromedp.WaitReady("#close", chromedp.ByQuery),
+		saveAndUseCookies(ydContext, "#close"),
+	}
+}
+
+func doDownload(ctx context.Context, ydContext *YDNoteContext, onLoginOk func(context.Context, *YDNoteContext)) chromedp.ActionFunc {
 	return func(ctx context.Context) (err error) {
 		log.Info().Msg("开始下载...")
-		onLoginOk(ydContext)
+		onLoginOk(ctx, ydContext)
 		return
 	}
 }
 
-func doYoudaoNoteLogin(ydContext *YDNoteContext, url string, onLoginOk func(*YDNoteContext)) {
+func doYoudaoNoteLogin(ydContext *YDNoteContext, host string, onLoginOk func(context.Context, *YDNoteContext)) {
 	ctx, _ := chromedp.NewExecAllocator(
 		ydContext.Context,
 
@@ -241,21 +323,130 @@ func doYoudaoNoteLogin(ydContext *YDNoteContext, url string, onLoginOk func(*YDN
 	)
 
 	// 打开有道官网
-	log.Info().Str("url", url).Msg("begin navigate")
+	_ = localExpordWordDir("word")
+	fp, _ := filepath.Abs(localExpordWordDir())
+
+	log.Info().Str("host", host).Msg("begin navigate")
 	if err := chromedp.Run(ctx,
-		doLogin(ydContext, url)); err != nil {
+		network.Enable(),
+		browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllow).
+			WithDownloadPath(fp).
+			WithEventsEnabled(true),
+		doLogin(ydContext, host)); err != nil {
 		log.Fatal().Err(err).Send()
 		return
 	}
 
+	chromedp.ListenTarget(ctx, func(v interface{}) {
+		{
+			// log.Info().Interface("event", v).Msg("listen target")
+		}
+		switch ev := v.(type) {
+		case *network.EventSignedExchangeReceived:
+			// log.Info().Str("RequestID", string(ev.RequestID)).Interface("Info", ev.Info).Msg("listen target event signed exhanged received")
+
+		case *network.EventRequestWillBeSent:
+			// log.Info().Interface("raw_query", ev.Request).Msg("listen target request be sent")
+		case *network.EventResponseReceived:
+			// u, err := url.Parse(ev.Response.URL)
+			// if err != nil {
+			// 	panic(err)
+			// }
+			// _, err = url.ParseQuery(u.RawQuery)
+			// if err != nil {
+			// 	panic(err)
+			// }
+
+			// log.Info().Str("raw_query", u.RawQuery).Msg("listen target permision")
+			// // if signInfo == nil || len(signToken) == 0 {
+			// // 	if sign, ok := vals["sign"]; ok {
+			// // 		signInfo = &signStruct{}
+			// // 		err := json.Unmarshal([]byte(sign[0]), &signInfo)
+			// // 		if err != nil {
+			// // 			panic(err)
+			// // 		}
+
+			// // 		signInfo.UserID = vals["userId"][0]
+
+			// // 		// if s, err := base64.URLEncoding.DecodeString(signToken.Secret); err == nil {
+			// // 		// 	signToken.Secret = string(s)
+			// // 		// }
+			// // 		// if s, err := base64.URLEncoding.DecodeString(signToken.Signature); err == nil {
+			// // 		// 	signToken.Signature = string(s)
+			// // 		// }
+			// // 	}
+			// // 	if token, ok := vals["token"]; ok {
+			// // 		signToken = token[0]
+			// // 	}
+			// // }
+
+		case *browser.EventDownloadWillBegin:
+			log.Info().Interface("GUID", ev.GUID).Str("SuggestedFilename", ev.SuggestedFilename).Msg("listen target download begin")
+			downloadingFiles.Store(ev.GUID, ev.SuggestedFilename)
+
+		case *browser.EventDownloadProgress:
+			if ev.State == browser.DownloadProgressStateCanceled {
+				log.Info().Str("state", ev.State.String()).Str("GUID", ev.GUID).
+					Msg("listen target download canceled")
+				if loadVal, ok := downloadingFiles.LoadAndDelete(ev.GUID); ok {
+					filename, _ := loadVal.(string)
+					if _, relativeOK := downloadFileAbsPath.LoadAndDelete(filename); relativeOK {
+						atomic.AddInt32(&downloadingCount, -1)
+					}
+				}
+			} else if ev.State == browser.DownloadProgressStateCompleted {
+				log.Info().Str("state", ev.State.String()).Str("GUID", ev.GUID).
+					Msg("listen target download finish")
+
+				if loadVal, ok := downloadingFiles.LoadAndDelete(ev.GUID); ok {
+					filename, _ := loadVal.(string)
+					if relativePath, relativeOK := downloadFileAbsPath.LoadAndDelete(trimFileName(filename)); relativeOK {
+						atomic.AddInt32(&downloadingCount, -1)
+						cachePath, _ := filepath.Abs(localExpordWordDir(filename))
+						targetPath, _ := relativePath.(string)
+						log.Info().Str("state", ev.State.String()).Str("GUID", ev.GUID).
+							Str("cache_path", cachePath).
+							Str("target_path", targetPath).
+							Msg("download finish")
+
+						err := os.Rename(cachePath, targetPath)
+						if err != nil {
+							cachePath = filepath.Clean(cachePath)
+							log.Error().Str("cachePath", cachePath).Err(err).Send()
+						}
+					} else {
+						log.Error().Interface("file", filename).Msg("fail to find file relative path")
+					}
+				}
+			}
+
+		case *network.EventRequestWillBeSentExtraInfo:
+		// 	log.Info().Interface("event", ev).Msg("listen target request extra info")
+		// // if len(authorization) == 0 {
+		// // 	if a, ok := ev.Headers["Authorization"].(string); ok {
+		// // 		authorization = a
+		// // 		log.Info().Str("authorization", authorization).Msg("get authorization")
+		// // 	}
+		// // }
+		case *cdproto.Message:
+			if len(sessionID) == 0 {
+				sessionID = ev.SessionID.String()
+			}
+		default:
+			// log.Info().Interface("event", v).Msg("listen targetdefault")
+		}
+	})
+
+	// _ = chromedp.Sleep(time.Hour).Do(ctx)
+
 	// 等待登陆完成
 	if err := chromedp.Run(ctx,
 		chromedp.WaitVisible(loginSel),
-		doDownload(ydContext, onLoginOk)); err != nil {
+		doDownload(ctx, ydContext, onLoginOk)); err != nil {
 		log.Fatal().Err(err).Send()
 		return
 	}
 	time.Sleep(time.Second * 5)
 
-	log.Info().Str("url", url).Msg("end navigate")
+	log.Info().Str("host", host).Msg("end navigate")
 }

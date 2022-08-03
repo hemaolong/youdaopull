@@ -26,6 +26,8 @@ type YDNoteContext struct {
 	ContextCancel func()
 
 	Cookies network.SetCookiesParams
+
+	yfs *YdFileSystem
 }
 
 func CreateContext() *YDNoteContext {

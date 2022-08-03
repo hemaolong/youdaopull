@@ -5,7 +5,13 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog/log"
 )
 
@@ -13,11 +19,21 @@ var (
 	ydLocalDir  string // 本地文件目录
 	ydRemoteDir string // 有道云笔记拉取的目录，只能是根目录
 	ydHeadless  bool   // 是否打开chrome浏览器
+	ydLoginMode string // 登陆模式，默认是扫码微信登陆
 
 	// ydFileSystem = &YdFileSystem{}
 	ydContext context.Context
 
 	terminalWriter io.Writer
+
+	sessionID string
+
+	// downloadFileRelativePath sync.Map // 下载文件的相对目录，文件下载结束之后移动到相对目录
+	downloadingFiles    sync.Map
+	downloadFileAbsPath sync.Map
+	downloadingCount    int32
+
+	regpTrimFilename = regexp.MustCompile(`[\PP]+`)
 )
 
 const (
@@ -37,6 +53,17 @@ const (
 	downloadNoteURL = "https://note.youdao.com/yws/api/personal/sync?method=download&keyfrom=web"
 	// 资源下载地址
 	downloadResURL = `https://note.youdao.com/yws/res/%d/%s`
+
+	// downWorkURL = `https://note.youdao.com/ydoc/api/personal/doc?method=download-docx&fileId=%s&keyfrom=web`
+	// word下载方式
+	// def getNoteDocx(self, id, saveDir):
+	//       url = 'https://note.youdao.com/ydoc/api/personal/doc?method=download-docx&fileId=%s&cstk=%s&keyfrom=web' % (id, self.cstk)
+	//       response = self.get(url)
+	//       with open('%s/%s.docx' % (saveDir, id), 'w') as fp:
+	//           fp.write(response.content)
+	// downloadWordURL = `https://hubble.netease.com/track/w/`
+	// downloadWordURL = "https://note.youdao.com/ydoc/api/personal/doc?method=download-docx"
+	setCurrentFileURL = `https://note.youdao.com/web/#/file/%s/note/%s/`
 )
 
 const (
@@ -64,6 +91,13 @@ func localCacheDir(subDir ...string) string {
 	return localDir(tmp...)
 }
 
+func localExpordWordDir(subDir ...string) string {
+	tmp := make([]string, 0, 10)
+	tmp = append(tmp, "__docx")
+	tmp = append(tmp, subDir...)
+	return localFileDir(tmp...)
+}
+
 func localDir(tmp ...string) string {
 	ret := path.Join(tmp...)
 	dir := path.Dir(ret)
@@ -72,4 +106,25 @@ func localDir(tmp ...string) string {
 		log.Error().Err(err).Msg("mkdir fail")
 	}
 	return ret
+}
+
+func waitUntil(begin time.Time, duration time.Duration, ctx context.Context, cancelFunc func() bool) {
+	var costTime time.Duration
+	for {
+		_ = chromedp.Sleep(time.Second).Do(ctx)
+		costTime = time.Since(begin)
+
+		if cancelFunc() || costTime >= duration {
+			break
+		}
+	}
+}
+
+// 收藏笔记title名字会稍做调整
+func trimFileName(t string) string {
+	fileExtension := filepath.Ext(t)
+
+	strs := regpTrimFilename.FindAllString(t, -1)
+	ret := strings.Join(strs, "") + fileExtension
+	return strings.ReplaceAll(ret, " ", "")
 }
