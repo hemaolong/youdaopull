@@ -24,7 +24,7 @@ func main() {
 		terminalWriter = os.Stdout
 	}
 
-	ydLoginMode = "other"
+	// ydLoginMode = "other"
 	if !isWXLogin() && ydHeadless {
 		ydHeadless = false
 		log.Warn().Msg("非微信登陆，必须打开浏览器")
