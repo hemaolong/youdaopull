@@ -207,9 +207,10 @@ func exportToWord(ctx context.Context, ydContext *YDNoteContext, f *YdNoteFile, 
 		return err
 	}
 
+	// 找到按钮
 	// chromedp.Sleep(time.Microsecond * time.Duration(rand.Int31n(500)+1500)).Do(ctx)
 	// exportAsWordSel := `#hd-space-between > toolbar > div > div:nth-child(3) > ul > li:nth-child(13)`
-	exportAsWordSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3) > ul > li:nth-child(14)`
+	exportAsWordSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3) > ul > li:nth-child(14) > span`
 	_ = chromedp.WaitVisible(exportAsWordSel).Do(ctx)
 	_ = chromedp.WaitEnabled(exportAsWordSel).Do(ctx)
 
