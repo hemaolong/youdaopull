@@ -193,27 +193,41 @@ func exportToWord(ctx context.Context, ydContext *YDNoteContext, f *YdNoteFile, 
 		Str("local_path", fullPathStr).
 		Msg("download file word")
 
-	_ = chromedp.WaitVisible(`#flexible-left > div.sidebar.electron-drag > div.sidebar-header > app-personal > div > div`).Do(ctx)
+	{
+		fmt.Println("downaload docs(wait tool menu button visible)...")
+		// #flexible-left > div.sidebar.electron-drag > div.sidebar-header > app-personal > div > div
+		// 等待 '更多' 按钮
+		toolSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3)`
+		_ = chromedp.WaitVisible(toolSel).Do(ctx)
 
-	// toolbarSel := `#hd-space-between > toolbar > div > div:nth-child(3)`
-	// toolbarSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3) > ul`
-	toolbarSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3)`
-	_ = chromedp.WaitVisible(toolbarSel).Do(ctx) // 打开菜单界面
-	// _ = chromedp.WaitEnabled(toolbarSel).Do(ctx) //
+		err = chromedp.Click(toolSel).Do(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	{
+		// 等待 '更多' 弹出的菜单
+		// toolbarSel := `#hd-space-between > toolbar > div > div:nth-child(3)`
+		toolbarSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3) > ul`
+		fmt.Println("downaload docs(wait tool menu visible)...")
+		// toolbarSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3)`
+		_ = chromedp.WaitVisible(toolbarSel).Do(ctx) // 打开菜单界面
+		// _ = chromedp.WaitEnabled(toolbarSel).Do(ctx) //
 
-	// 点出操作菜单
-	err = chromedp.Click(toolbarSel).Do(ctx)
-	if err != nil {
-		return err
+		// 点出操作菜单
+		// err = chromedp.Click(toolbarSel).Do(ctx)
+		// if err != nil {
+		// 	return err
+		// }
 	}
 
 	// 找到按钮
 	// chromedp.Sleep(time.Microsecond * time.Duration(rand.Int31n(500)+1500)).Do(ctx)
 	// exportAsWordSel := `#hd-space-between > toolbar > div > div:nth-child(3) > ul > li:nth-child(13)`
-	exportAsWordSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3) > ul > li:nth-child(14) > span`
-	_ = chromedp.WaitVisible(exportAsWordSel).Do(ctx)
+	// #hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3) > ul > li:nth-child(13) > span
+	exportAsWordSel := `#hd-space-between > div.title-right-container > toolbar > div > div:nth-child(3) > ul > li:nth-child(13) > span`
+	fmt.Println("downaload docs(wait button visible)...")
 	_ = chromedp.WaitEnabled(exportAsWordSel).Do(ctx)
-
 	waitUntil(time.Now(), time.Second*300, ctx, func() bool {
 		if atomic.LoadInt32(&downloadingCount) >= 12 {
 			chromedp.Sleep(time.Second).Do(ctx)
@@ -225,11 +239,13 @@ func exportToWord(ctx context.Context, ydContext *YDNoteContext, f *YdNoteFile, 
 	})
 
 	// 导出
+	fmt.Println("downaload docs(click button)...")
 	err = chromedp.Click(exportAsWordSel).Do(ctx)
 	if err != nil {
 		return err
 	}
 	atomic.AddInt32(&downloadingCount, 1)
+	fmt.Println("downaload docs(finish)...")
 
 	downloadFileAbsPath.Store(trimFileName(exportFileName), fullPathStr)
 
